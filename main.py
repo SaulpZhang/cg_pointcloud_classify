@@ -1,10 +1,11 @@
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
-from typing import Iterable, Tuple
+from typing import Tuple
 
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import visualize_demo
 import pointcloud_multiview
@@ -49,11 +50,12 @@ def transform_point_cloud_to_2d(h5_file_list: list, labels: dict, output_dir: st
                 tasks.append((points, label_idx, whole_index, label_name, output_dir))
 
     if num_workers <= 1:
-        for task in tasks:
+        for task in tqdm(tasks, desc="Rendering point clouds", total=len(tasks)):
             _render_one_sample(task)
     else:
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            list(executor.map(_render_one_sample, tasks))
+            for _ in tqdm(executor.map(_render_one_sample, tasks), total=len(tasks), desc="Rendering point clouds"):
+                pass
                 
 
 
