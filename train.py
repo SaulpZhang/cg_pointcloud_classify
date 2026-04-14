@@ -127,12 +127,14 @@ class FeatureDataset(Dataset):
 
 
 class CLIPClassifier(nn.Module):
-    def __init__(self, feature_dim: int, num_classes: int = 40):
+    def __init__(self, feature_dim: int, num_classes: int = 40, hidden_dim: int = 512, dropout: float = 0.1):
         super().__init__()
         self.classifier = nn.Sequential(
             nn.LayerNorm(feature_dim),
-            nn.Dropout(0.1),
-            nn.Linear(feature_dim, num_classes),
+            nn.Linear(feature_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
