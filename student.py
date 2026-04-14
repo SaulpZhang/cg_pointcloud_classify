@@ -260,6 +260,7 @@ def load_or_compute_teacher_soft_labels(
     point_radius: int,
     camera_distance: float,
     image_batch_size: int,
+    reextract: bool = False,
 ) -> torch.Tensor:
     cache_path = Path(render_root) / f"teacher_soft_labels_{split_name}.pt"
     cache_meta = {
@@ -273,7 +274,7 @@ def load_or_compute_teacher_soft_labels(
         "teacher_checkpoint": getattr(teacher, "clip_model_name", None),
     }
 
-    if cache_path.exists():
+    if (not reextract) and cache_path.exists():
         cached = torch.load(cache_path, map_location="cpu")
         if isinstance(cached, dict) and cached.get("meta") == cache_meta and "soft_labels" in cached:
             print(f"Loaded cached teacher soft labels: {cache_path}")
@@ -458,6 +459,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--gpu_ids", type=str, default="")
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--reextract", action=argparse.BooleanOptionalAction, default=False, help="Recompute teacher soft labels and overwrite cache")
 
     parser.add_argument("--distill_alpha", type=float, default=0.7)
     parser.add_argument("--distill_temperature", type=float, default=2.0)
@@ -521,6 +523,7 @@ def main() -> None:
             point_radius=args.teacher_point_radius,
             camera_distance=args.teacher_camera_distance,
             image_batch_size=args.teacher_image_batch_size,
+            reextract=args.reextract,
         )
         val_soft = load_or_compute_teacher_soft_labels(
             teacher=teacher,
@@ -535,6 +538,7 @@ def main() -> None:
             point_radius=args.teacher_point_radius,
             camera_distance=args.teacher_camera_distance,
             image_batch_size=args.teacher_image_batch_size,
+            reextract=args.reextract,
         )
         test_soft = load_or_compute_teacher_soft_labels(
             teacher=teacher,
@@ -549,6 +553,7 @@ def main() -> None:
             point_radius=args.teacher_point_radius,
             camera_distance=args.teacher_camera_distance,
             image_batch_size=args.teacher_image_batch_size,
+            reextract=args.reextract,
         )
 
         train_dataset = PointCloudSoftLabelDataset(train_data, train_label, train_soft, num_points=args.num_points)
@@ -614,6 +619,7 @@ def main() -> None:
                     "teacher_fov_degrees": args.teacher_fov_degrees,
                     "teacher_point_radius": args.teacher_point_radius,
                     "teacher_camera_distance": args.teacher_camera_distance,
+                    "reextract": args.reextract,
                     "gpu_ids": gpu_ids,
                     "use_data_parallel": use_dp,
                     "amp": use_amp,
