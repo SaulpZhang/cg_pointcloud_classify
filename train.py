@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -147,6 +148,67 @@ def image_collate(batch):
     return images, labels
 
 
+def build_samples_digest(samples: List[Sample]) -> str:
+    hasher = hashlib.sha1()
+    for sample in samples:
+        hasher.update(str(sample.image_path).encode("utf-8"))
+        hasher.update(str(sample.label_index).encode("utf-8"))
+        hasher.update(str(sample.object_index).encode("utf-8"))
+        hasher.update(str(sample.view_id).encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def build_feature_cache_path(cache_dir: str, split_name: str, image_dir: str, clip_model_name: str) -> Path:
+    safe_image_dir = Path(image_dir).name.replace("/", "_")
+    safe_clip_model = clip_model_name.replace("/", "_").replace(":", "_")
+    return Path(cache_dir) / f"{split_name}_{safe_image_dir}_{safe_clip_model}.pt"
+
+
+def load_or_extract_clip_features(
+    split_name: str,
+    samples: List[Sample],
+    dataloader: DataLoader,
+    clip_model: CLIPModel,
+    processor: CLIPProcessor,
+    device: torch.device,
+    use_amp: bool,
+    image_dir: str,
+    clip_model_name: str,
+    reextract: bool,
+    cache_dir: str = "feature_cache",
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    cache_path = build_feature_cache_path(cache_dir, split_name, image_dir, clip_model_name)
+    cache_meta = {
+        "cache_version": 1,
+        "split_name": split_name,
+        "image_dir": image_dir,
+        "clip_model": clip_model_name,
+        "num_samples": len(samples),
+        "samples_digest": build_samples_digest(samples),
+    }
+
+    if not reextract and cache_path.exists():
+        cached = torch.load(cache_path, map_location="cpu")
+        if isinstance(cached, dict) and cached.get("meta") == cache_meta and "features" in cached and "labels" in cached:
+            print(f"Loaded cached CLIP features for {split_name}: {cache_path}")
+            return cached["features"].float(), cached["labels"].long()
+
+    print(f"Extracting CLIP {split_name} features...")
+    features, labels = extract_clip_features(clip_model, processor, dataloader, device, use_amp)
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "meta": cache_meta,
+            "features": features.cpu(),
+            "labels": labels.cpu(),
+        },
+        cache_path,
+    )
+    print(f"Saved CLIP {split_name} feature cache: {cache_path}")
+    return features, labels
+
+
 def extract_clip_features(
     clip_model: CLIPModel,
     processor: CLIPProcessor,
@@ -279,6 +341,7 @@ def main():
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--gpu_ids", type=str, default="", help="Comma separated GPU ids, e.g. '0,1,2,3,4,5,6,7'. Empty means all visible GPUs.")
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True, help="Use mixed precision (recommended on V100)")
+    parser.add_argument("--reextract", action=argparse.BooleanOptionalAction, default=False, help="Re-extract CLIP features and overwrite cache")
     parser.add_argument("--save_path", type=str, default="clip_classifier_40cls.pth")
     parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--wandb_project", type=str, default="pointcloudclassify")
@@ -364,12 +427,42 @@ def main():
         for p in clip_model.parameters():
             p.requires_grad = False
 
-        print("Extracting CLIP train features...")
-        train_features, train_labels = extract_clip_features(clip_model, processor, train_loader_img, device, use_amp)
-        print("Extracting CLIP val features...")
-        val_features, val_labels = extract_clip_features(clip_model, processor, val_loader_img, device, use_amp)
-        print("Extracting CLIP test features...")
-        test_features, test_labels = extract_clip_features(clip_model, processor, test_loader_img, device, use_amp)
+        train_features, train_labels = load_or_extract_clip_features(
+            split_name="train",
+            samples=train_samples,
+            dataloader=train_loader_img,
+            clip_model=clip_model,
+            processor=processor,
+            device=device,
+            use_amp=use_amp,
+            image_dir=args.image_dir,
+            clip_model_name=args.clip_model,
+            reextract=args.reextract,
+        )
+        val_features, val_labels = load_or_extract_clip_features(
+            split_name="val",
+            samples=val_samples,
+            dataloader=val_loader_img,
+            clip_model=clip_model,
+            processor=processor,
+            device=device,
+            use_amp=use_amp,
+            image_dir=args.image_dir,
+            clip_model_name=args.clip_model,
+            reextract=args.reextract,
+        )
+        test_features, test_labels = load_or_extract_clip_features(
+            split_name="test",
+            samples=test_samples,
+            dataloader=test_loader_img,
+            clip_model=clip_model,
+            processor=processor,
+            device=device,
+            use_amp=use_amp,
+            image_dir=args.test_image_dir,
+            clip_model_name=args.clip_model,
+            reextract=args.reextract,
+        )
 
         feature_dim = train_features.size(1)
         classifier = CLIPClassifier(feature_dim=feature_dim, num_classes=40).to(device)
@@ -425,6 +518,7 @@ def main():
                     "gpu_ids": gpu_ids,
                     "use_data_parallel": use_data_parallel,
                     "amp": use_amp,
+                    "reextract": args.reextract,
                 },
             )
             wandb_run.watch(classifier, log="all", log_freq=1000)
