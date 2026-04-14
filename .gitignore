@@ -1,0 +1,50 @@
+/.DS_Store
+/.vscode
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Packaging / build outputs
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+cmd.txt
+
+output_images
+output_images/*
+
+test_output_images
+test_output_images/*
+
+modelnet40_ply_hdf5_2048
+modelnet40_ply_hdf5_2048/*
+
+modelnet40_ply_hdf5_2048.zip
+
+Pointnet_Pointnet2_pytorch-master.zip
+Pointnet_Pointnet2_pytorch-master
+Pointnet_Pointnet2_pytorch-master/*

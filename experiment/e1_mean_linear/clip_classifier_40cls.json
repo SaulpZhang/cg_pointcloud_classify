@@ -1,0 +1,13 @@
+{
+  "clip_model": "openai/clip-vit-large-patch14",
+  "feature_dim": 768,
+  "num_classes": 40,
+  "best_val_acc": 0.7696900406504065,
+  "final_test_loss": 0.890901181542957,
+  "final_test_acc": 0.7385197190707725,
+  "image_dir": "output_images",
+  "test_image_dir": "test_output_images",
+  "train_size": 94464,
+  "val_size": 23616,
+  "test_size": 29616
+}

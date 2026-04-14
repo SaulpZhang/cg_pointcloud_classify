@@ -1,0 +1,24 @@
+{
+  "student_model": "PointNet++ SSG",
+  "teacher_checkpoint": "clip_classifier_40cls.pth",
+  "teacher_clip_model": "openai/clip-vit-large-patch14",
+  "num_classes": 40,
+  "num_points": 2048,
+  "train_size": 8856,
+  "val_size": 984,
+  "test_size": 2468,
+  "best_val_acc": 0.9197154471544715,
+  "final_test_acc": 0.9007293354943274,
+  "final_test_total_loss": 0.4917315470727954,
+  "final_test_ce_loss": 0.33345356530463094,
+  "final_test_kd_loss": 0.5595649726193767,
+  "best_snapshot": {
+    "epoch": 122,
+    "train_acc": 0.9443315266485999,
+    "val_acc": 0.9197154471544715,
+    "test_acc": 0.9003241491085899,
+    "val_total_loss": 0.41441872643261424
+  },
+  "distill_alpha": 0.7,
+  "distill_temperature": 2.0
+}
