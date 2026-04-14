@@ -594,6 +594,7 @@ def main() -> None:
             wandb_run = wandb.init(
                 entity=args.wandb_entity,
                 project=args.wandb_project,
+                group='student',
                 name=args.wandb_run_name,
                 config={
                     "student_model": "PointNet++ SSG",

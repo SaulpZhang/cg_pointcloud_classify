@@ -502,6 +502,7 @@ def main():
             wandb_run = wandb.init(
                 entity=args.wandb_entity,
                 project=args.wandb_project,
+                group='teacher',
                 name=args.wandb_run_name,
                 config={
                     "image_dir": args.image_dir,
