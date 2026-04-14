@@ -128,7 +128,7 @@ class FeatureDataset(Dataset):
 
 
 class CLIPClassifier(nn.Module):
-    def __init__(self, feature_dim: int, num_classes: int = 40, hidden_dim: int = 512, dropout: float = 0.1):
+    def __init__(self, feature_dim: int, num_classes: int = 40, hidden_dim: int = 256, dropout: float = 0.3):
         super().__init__()
         self.classifier = nn.Sequential(
             nn.LayerNorm(feature_dim),
@@ -348,6 +348,9 @@ def main():
     parser.add_argument("--wandb_entity", type=str, default="group_cg")
     parser.add_argument("--wandb_run_name", type=str, default="try")
     parser.add_argument("--wandb_log_weights_every", type=int, default=1)
+    parser.add_argument("--head_hidden_dim", type=int, default=256, help="Hidden dimension of classifier MLP head")
+    parser.add_argument("--head_dropout", type=float, default=0.3, help="Dropout rate of classifier MLP head")
+    parser.add_argument("--label_smoothing", type=float, default=0.1, help="Label smoothing for CE loss")
     args = parser.parse_args()
     wandb_run: Optional[object] = None
 
@@ -465,7 +468,12 @@ def main():
         )
 
         feature_dim = train_features.size(1)
-        classifier = CLIPClassifier(feature_dim=feature_dim, num_classes=40).to(device)
+        classifier = CLIPClassifier(
+            feature_dim=feature_dim,
+            num_classes=40,
+            hidden_dim=args.head_hidden_dim,
+            dropout=args.head_dropout,
+        ).to(device)
         if use_data_parallel:
             classifier = nn.DataParallel(classifier, device_ids=gpu_ids)
 
@@ -495,7 +503,7 @@ def main():
         )
 
         optimizer = torch.optim.AdamW(classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
         if args.use_wandb:
@@ -520,6 +528,9 @@ def main():
                     "use_data_parallel": use_data_parallel,
                     "amp": use_amp,
                     "reextract": args.reextract,
+                    "head_hidden_dim": args.head_hidden_dim,
+                    "head_dropout": args.head_dropout,
+                    "label_smoothing": args.label_smoothing,
                 },
             )
             wandb_run.watch(classifier, log="all", log_freq=1000)

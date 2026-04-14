@@ -42,9 +42,17 @@ class TeacherModel:
         self.clip_model_name = clip_model_name or meta.get("clip_model", "openai/clip-vit-base-patch32")
 
         classifier_state = checkpoint["classifier_state_dict"]
-        linear_weight = classifier_state.get("classifier.2.weight")
+        linear_weight = classifier_state.get("classifier.4.weight")
         if linear_weight is None:
-            raise KeyError("classifier_state_dict missing key: classifier.2.weight")
+            linear_weight = classifier_state.get("classifier.2.weight")
+        if linear_weight is None:
+            classifier_weight_keys = [
+                k for k in classifier_state.keys() if k.startswith("classifier.") and k.endswith(".weight")
+            ]
+            if not classifier_weight_keys:
+                raise KeyError("classifier_state_dict missing classifier.*.weight keys")
+            last_key = sorted(classifier_weight_keys, key=lambda x: int(x.split(".")[1]))[-1]
+            linear_weight = classifier_state[last_key]
 
         feature_dim = int(meta.get("feature_dim", linear_weight.shape[1]))
         num_classes = int(meta.get("num_classes", linear_weight.shape[0]))
