@@ -59,12 +59,15 @@ def distillation_step(
 
     ce_loss = F.cross_entropy(logits, labels)
 
-    log_probs_student = F.log_softmax(logits / temperature, dim=1)
-    # Ensure teacher_probs matches the dtype of logits (important for AMP)
-    teacher_probs = teacher_probs.to(dtype=logits.dtype)
-    kd_loss = F.kl_div(log_probs_student, teacher_probs, reduction="batchmean") * (temperature ** 2)
-
-    total_loss = (1.0 - alpha) * ce_loss + alpha * kd_loss
+    if alpha <= 0.0:
+        kd_loss = torch.zeros_like(ce_loss)
+        total_loss = ce_loss
+    else:
+        log_probs_student = F.log_softmax(logits / temperature, dim=1)
+        # Ensure teacher_probs matches the dtype of logits (important for AMP)
+        teacher_probs = teacher_probs.to(dtype=logits.dtype)
+        kd_loss = F.kl_div(log_probs_student, teacher_probs, reduction="batchmean") * (temperature ** 2)
+        total_loss = (1.0 - alpha) * ce_loss + alpha * kd_loss
 
     return DistillBatchOutput(
         total_loss=total_loss,
@@ -120,6 +123,11 @@ class PointCloudSoftLabelDataset(Dataset):
             torch.tensor(label, dtype=torch.long),
             soft,
         )
+
+
+def build_dummy_soft_labels(labels: np.ndarray, num_classes: int) -> torch.Tensor:
+    label_tensor = torch.from_numpy(labels.astype(np.int64).reshape(-1))
+    return F.one_hot(label_tensor, num_classes=num_classes).float()
 
 
 def _resolve_h5_path(modelnet_root: Path, line_path: str) -> Path:
@@ -500,61 +508,70 @@ def main() -> None:
             seed=args.seed,
         )
 
-        teacher_clip_override = args.teacher_clip_model.strip() or None
-        teacher = load_teacher(
-            checkpoint_path=args.teacher_checkpoint,
-            clip_model_name=teacher_clip_override,
-            use_amp=args.amp,
-        )
+        use_distill = args.distill_alpha > 0.0
+        teacher: Optional[TeacherModel] = None
 
-        print(f"Teacher device: {teacher.device}")
-        print("Computing teacher soft labels for train/val/test ...")
+        if use_distill:
+            teacher_clip_override = args.teacher_clip_model.strip() or None
+            teacher = load_teacher(
+                checkpoint_path=args.teacher_checkpoint,
+                clip_model_name=teacher_clip_override,
+                use_amp=args.amp,
+            )
 
-        train_soft = load_or_compute_teacher_soft_labels(
-            teacher=teacher,
-            points_np=train_data,
-            labels_np=train_label,
-            shape_names=shape_names,
-            render_root=args.teacher_render_dir,
-            split_name="train",
-            num_views=args.teacher_num_views,
-            image_size=args.teacher_image_size,
-            fov_degrees=args.teacher_fov_degrees,
-            point_radius=args.teacher_point_radius,
-            camera_distance=args.teacher_camera_distance,
-            image_batch_size=args.teacher_image_batch_size,
-            reextract=args.reextract,
-        )
-        val_soft = load_or_compute_teacher_soft_labels(
-            teacher=teacher,
-            points_np=val_data,
-            labels_np=val_label,
-            shape_names=shape_names,
-            render_root=args.teacher_render_dir,
-            split_name="val",
-            num_views=args.teacher_num_views,
-            image_size=args.teacher_image_size,
-            fov_degrees=args.teacher_fov_degrees,
-            point_radius=args.teacher_point_radius,
-            camera_distance=args.teacher_camera_distance,
-            image_batch_size=args.teacher_image_batch_size,
-            reextract=args.reextract,
-        )
-        test_soft = load_or_compute_teacher_soft_labels(
-            teacher=teacher,
-            points_np=test_data,
-            labels_np=test_label,
-            shape_names=shape_names,
-            render_root=args.teacher_render_dir,
-            split_name="test",
-            num_views=args.teacher_num_views,
-            image_size=args.teacher_image_size,
-            fov_degrees=args.teacher_fov_degrees,
-            point_radius=args.teacher_point_radius,
-            camera_distance=args.teacher_camera_distance,
-            image_batch_size=args.teacher_image_batch_size,
-            reextract=args.reextract,
-        )
+            print(f"Teacher device: {teacher.device}")
+            print("Computing teacher soft labels for train/val/test ...")
+
+            train_soft = load_or_compute_teacher_soft_labels(
+                teacher=teacher,
+                points_np=train_data,
+                labels_np=train_label,
+                shape_names=shape_names,
+                render_root=args.teacher_render_dir,
+                split_name="train",
+                num_views=args.teacher_num_views,
+                image_size=args.teacher_image_size,
+                fov_degrees=args.teacher_fov_degrees,
+                point_radius=args.teacher_point_radius,
+                camera_distance=args.teacher_camera_distance,
+                image_batch_size=args.teacher_image_batch_size,
+                reextract=args.reextract,
+            )
+            val_soft = load_or_compute_teacher_soft_labels(
+                teacher=teacher,
+                points_np=val_data,
+                labels_np=val_label,
+                shape_names=shape_names,
+                render_root=args.teacher_render_dir,
+                split_name="val",
+                num_views=args.teacher_num_views,
+                image_size=args.teacher_image_size,
+                fov_degrees=args.teacher_fov_degrees,
+                point_radius=args.teacher_point_radius,
+                camera_distance=args.teacher_camera_distance,
+                image_batch_size=args.teacher_image_batch_size,
+                reextract=args.reextract,
+            )
+            test_soft = load_or_compute_teacher_soft_labels(
+                teacher=teacher,
+                points_np=test_data,
+                labels_np=test_label,
+                shape_names=shape_names,
+                render_root=args.teacher_render_dir,
+                split_name="test",
+                num_views=args.teacher_num_views,
+                image_size=args.teacher_image_size,
+                fov_degrees=args.teacher_fov_degrees,
+                point_radius=args.teacher_point_radius,
+                camera_distance=args.teacher_camera_distance,
+                image_batch_size=args.teacher_image_batch_size,
+                reextract=args.reextract,
+            )
+        else:
+            print("distill_alpha <= 0: skip teacher and run supervised PointNet++ training")
+            train_soft = build_dummy_soft_labels(train_label, args.num_classes)
+            val_soft = build_dummy_soft_labels(val_label, args.num_classes)
+            test_soft = build_dummy_soft_labels(test_label, args.num_classes)
 
         train_dataset = PointCloudSoftLabelDataset(train_data, train_label, train_soft, num_points=args.num_points)
         val_dataset = PointCloudSoftLabelDataset(val_data, val_label, val_soft, num_points=args.num_points)
@@ -604,7 +621,8 @@ def main() -> None:
                 config={
                     "student_model": "PointNet++ SSG",
                     "teacher_checkpoint": args.teacher_checkpoint,
-                    "teacher_clip_model": teacher.clip_model_name,
+                    "teacher_clip_model": teacher.clip_model_name if teacher is not None else None,
+                    "use_distillation": use_distill,
                     "num_classes": args.num_classes,
                     "num_points": args.num_points,
                     "epochs": args.epochs,
@@ -713,7 +731,8 @@ def main() -> None:
         meta = {
             "student_model": "PointNet++ SSG",
             "teacher_checkpoint": args.teacher_checkpoint,
-            "teacher_clip_model": teacher.clip_model_name,
+            "teacher_clip_model": teacher.clip_model_name if teacher is not None else None,
+            "use_distillation": use_distill,
             "num_classes": args.num_classes,
             "num_points": args.num_points,
             "train_size": len(train_dataset),
