@@ -27,7 +27,7 @@ def _render_one_sample(task: Tuple[np.ndarray, int, int, str, str]) -> None:
     )
 
 
-def transform_point_cloud_to_2d(h5_file_list: list, labels: dict, output_dir: str, num_workers: int = 4) -> None:
+def transform_point_cloud_to_2d(h5_file_list: list, labels: dict, output_dir: str, num_workers: int = 8) -> None:
     """从 HDF5 文件中读取点云数据并可视化为 2D 图像"""
     tasks: list[Tuple[np.ndarray, int, int, str, str]] = []
     whole_index = 0
