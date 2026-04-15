@@ -179,7 +179,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_amp", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--teacher_failed_dir", type=str, default="", help="If set, copy failed teacher inference images here")
-    parser.add_argument("--teacher_clip_model", type=str, default="", help="Optional override for teacher CLIP model")
+    parser.add_argument("--teacher_clip_model", type=str, default="openai/clip-vit-large-patch14", help="Optional override for teacher CLIP model")
     parser.add_argument("--teacher_image_batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
