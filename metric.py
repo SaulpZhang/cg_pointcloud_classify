@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from pointnet2_model import PointNet2Student
-from pointcloud_multiview import save_point_cloud_multiview_images
 from teacher import load_teacher
 
 
@@ -172,26 +171,54 @@ def copy_failed_images(image_paths: List[str], failed_root: str, sample_index: i
         shutil.copy2(image_path, failed_dir / Path(image_path).name)
 
 
+def parse_filename(image_path: Path) -> Tuple[int, int, int, str]:
+    stem = image_path.stem
+    parts = stem.split("_")
+    if len(parts) < 4:
+        raise ValueError(f"Filename format invalid: {image_path.name}")
+
+    label_name = "_".join(parts[:-3])
+    label_index = int(parts[-3])
+    object_index = int(parts[-2])
+    view_id = int(parts[-1])
+    return label_index, object_index, view_id, label_name
+
+
+def collect_image_groups(image_dir: str) -> List[Tuple[int, int, str, List[str]]]:
+    root = Path(image_dir)
+    if not root.exists():
+        raise FileNotFoundError(f"Image directory not found: {image_dir}")
+
+    groups = {}
+    for image_path in sorted(root.rglob("*.png")):
+        if not image_path.is_file():
+            continue
+        label_index, object_index, _, label_name = parse_filename(image_path)
+        key = (label_index, object_index)
+        if key not in groups:
+            groups[key] = {"label_name": label_name, "image_paths": []}
+        groups[key]["image_paths"].append(str(image_path))
+
+    if not groups:
+        raise ValueError(f"No PNG images found in: {image_dir}")
+
+    grouped_items = []
+    for (label_index, object_index), info in sorted(groups.items(), key=lambda item: item[0]):
+        grouped_items.append((label_index, object_index, info["label_name"], info["image_paths"]))
+    return grouped_items
+
+
 @torch.no_grad()
 def evaluate_teacher(
-    modelnet_root: str,
-    split_file: str,
+    image_dir: str,
     weights_path: str,
-    render_dir: str,
     failed_dir: str,
     device: torch.device,
-    batch_size: int,
-    num_views: int,
-    image_size: int,
-    fov_degrees: float,
-    point_radius: int,
-    camera_distance: float,
     image_batch_size: int,
     clip_model_name: Optional[str],
     use_amp: bool,
 ) -> float:
-    points_np, labels_np = load_modelnet_h5_from_list(modelnet_root, split_file)
-    shape_names = load_shape_names(modelnet_root)
+    groups = collect_image_groups(image_dir)
 
     teacher = load_teacher(
         checkpoint_path=weights_path,
@@ -203,32 +230,17 @@ def evaluate_teacher(
     total = 0
     correct = 0
     failed_count = 0
-    for index in tqdm(range(points_np.shape[0]), desc="Teacher inference"):
-        points = points_np[index]
-        label_idx = int(labels_np[index])
-        label_name = shape_names[label_idx] if 0 <= label_idx < len(shape_names) else f"class_{label_idx}"
-
-        image_paths = save_point_cloud_multiview_images(
-            points=points,
-            label_index=label_idx,
-            index=index,
-            label=label_name,
-            output_dir=render_dir,
-            num_views=num_views,
-            image_size=image_size,
-            fov_degrees=fov_degrees,
-            point_radius=point_radius,
-            camera_distance=camera_distance,
-        )
+    for label_idx, object_index, label_name, image_paths in tqdm(groups, desc="Teacher inference"):
+        sample_index = object_index
 
         try:
             prediction = teacher.predict_image_paths(image_paths=image_paths, batch_size=image_batch_size)
             correct += int(prediction.majority_label == label_idx)
         except Exception as exc:
             failed_count += 1
-            print(f"Teacher inference failed for sample {index} ({label_name}): {exc}")
+            print(f"Teacher inference failed for sample {sample_index} ({label_name}): {exc}")
             if failed_dir.strip():
-                copy_failed_images(image_paths, failed_dir, index, label_name)
+                copy_failed_images(image_paths, failed_dir, sample_index, label_name)
         total += 1
 
     accuracy = correct / max(total, 1)
@@ -273,22 +285,21 @@ def evaluate_student(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run teacher or student inference on ModelNet40")
     parser.add_argument("--mode", type=str, choices=["teacher", "student"], required=True)
-    parser.add_argument("--data_dir", type=str, default="modelnet40_ply_hdf5_2048", help="ModelNet40 data root")
-    parser.add_argument("--split_file", type=str, default="test_files.txt", help="Split list file under data_dir")
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default="test_output_images",
+        help="Teacher mode: 2D image directory. Student mode: ModelNet40 data root",
+    )
+    parser.add_argument("--split_file", type=str, default="test_files.txt", help="Student split list file under data_dir")
     parser.add_argument("--weights_path", type=str, required=True, help="Checkpoint file path or directory")
     parser.add_argument("--device", type=str, default="", help="Optional device override, e.g. cpu or cuda:0")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_points", type=int, default=2048)
     parser.add_argument("--use_amp", action=argparse.BooleanOptionalAction, default=True)
 
-    parser.add_argument("--render_dir", type=str, default="metric_render_cache", help="Teacher rendering cache/output dir")
     parser.add_argument("--teacher_failed_dir", type=str, default="", help="If set, copy failed teacher inference images here")
     parser.add_argument("--teacher_clip_model", type=str, default="", help="Optional override for teacher CLIP model")
-    parser.add_argument("--teacher_num_views", type=int, default=12)
-    parser.add_argument("--teacher_image_size", type=int, default=256)
-    parser.add_argument("--teacher_fov_degrees", type=float, default=45.0)
-    parser.add_argument("--teacher_point_radius", type=int, default=2)
-    parser.add_argument("--teacher_camera_distance", type=float, default=1.6)
     parser.add_argument("--teacher_image_batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
@@ -316,18 +327,10 @@ def main() -> None:
 
     if args.mode == "teacher":
         evaluate_teacher(
-            modelnet_root=args.data_dir,
-            split_file=args.split_file,
+            image_dir=args.data_dir,
             weights_path=weights_path,
-            render_dir=args.render_dir,
             failed_dir=args.teacher_failed_dir,
             device=device,
-            batch_size=args.batch_size,
-            num_views=args.teacher_num_views,
-            image_size=args.teacher_image_size,
-            fov_degrees=args.teacher_fov_degrees,
-            point_radius=args.teacher_point_radius,
-            camera_distance=args.teacher_camera_distance,
             image_batch_size=args.teacher_image_batch_size,
             clip_model_name=args.teacher_clip_model.strip() or None,
             use_amp=use_amp,
