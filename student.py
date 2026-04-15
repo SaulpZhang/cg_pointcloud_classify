@@ -227,7 +227,27 @@ def fuse_teacher_probabilities(pred: Any, label_idx: int, distill_mode: int) -> 
 
         return probs / probs.sum().clamp(min=1e-8)
 
-    raise ValueError(f"Unsupported distill_mode: {distill_mode}. Currently supported: 0 (mean), 1 (correct-only mean).")
+    if distill_mode == 2:
+        view_probs = torch.tensor(pred.view_probabilities, dtype=torch.float32)
+        if view_probs.ndim != 2 or view_probs.shape[0] == 0:
+            probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+            return probs / probs.sum().clamp(min=1e-8)
+
+        # Confidence fusion: use each view's max class probability as fusion weight.
+        view_confidence = view_probs.max(dim=1).values
+        weight_sum = view_confidence.sum()
+        if float(weight_sum.item()) <= 1e-8:
+            probs = view_probs.mean(dim=0)
+        else:
+            weights = (view_confidence / weight_sum).unsqueeze(1)
+            probs = (view_probs * weights).sum(dim=0)
+
+        return probs / probs.sum().clamp(min=1e-8)
+
+    raise ValueError(
+        f"Unsupported distill_mode: {distill_mode}. "
+        "Currently supported: 0 (mean), 1 (correct-only mean), 2 (confidence-weighted mean)."
+    )
 
 
 @torch.no_grad()
@@ -499,7 +519,12 @@ def parse_args() -> argparse.Namespace:
         "--distill_mode",
         type=int,
         default=0,
-        help="Distillation fusion mode. 0: mean-probability fusion; 1: mean over correctly-classified views only",
+        help=(
+            "Distillation fusion mode. "
+            "0: mean-probability fusion; "
+            "1: mean over correctly-classified views only; "
+            "2: confidence-weighted fusion"
+        ),
     )
 
     parser.add_argument("--teacher_num_views", type=int, default=12)
