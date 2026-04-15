@@ -137,14 +137,22 @@ def evaluate_teacher(
             point_correct += int(prediction.majority_label == label_idx)
 
             if failed_dir.strip():
-                copy_misclassified_images(
-                    image_paths=image_paths,
-                    predictions=prediction.view_predictions,
-                    label_idx=label_idx,
-                    failed_root=failed_dir,
-                    sample_index=sample_index,
-                    label_name=label_name,
-                )
+                misclassified_predictions = [
+                    pred for pred in prediction.view_predictions if pred != label_idx
+                ]
+                misclassified_image_paths = [
+                    image_path for image_path, pred in zip(image_paths, prediction.view_predictions) if pred != label_idx
+                ]
+                if misclassified_image_paths:
+                    # Only copy 2D images that are individually misclassified.
+                    copy_misclassified_images(
+                        image_paths=misclassified_image_paths,
+                        predictions=misclassified_predictions,
+                        label_idx=label_idx,
+                        failed_root=failed_dir,
+                        sample_index=sample_index,
+                        label_name=label_name,
+                    )
         except Exception as exc:
             failed_count += 1
             print(f"Teacher inference failed for sample {sample_index} ({label_name}): {exc}")
