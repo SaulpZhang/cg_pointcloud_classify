@@ -1,0 +1,25 @@
+{
+  "student_model": "PointNet++ SSG",
+  "teacher_checkpoint": "clip_classifier_40cls.pth",
+  "teacher_clip_model": null,
+  "use_distillation": false,
+  "num_classes": 40,
+  "num_points": 2048,
+  "train_size": 8856,
+  "val_size": 984,
+  "test_size": 2468,
+  "best_val_acc": 0.9126016260162602,
+  "final_test_acc": 0.8918152350081038,
+  "final_test_total_loss": 0.5001093256898599,
+  "final_test_ce_loss": 0.5001093256898599,
+  "final_test_kd_loss": 0.0,
+  "best_snapshot": {
+    "epoch": 55,
+    "train_acc": 0.9750451671183379,
+    "val_acc": 0.9126016260162602,
+    "test_acc": 0.8885737439222042,
+    "val_total_loss": 0.41536021571818404
+  },
+  "distill_alpha": 0.0,
+  "distill_temperature": 2.0
+}
