@@ -44,25 +44,48 @@ def resolve_weights_path(weights_path: str, mode: str) -> str:
 
 def copy_misclassified_images(
     image_paths: List[str],
-    predictions: List[int],
-    label_idx: int,
     failed_root: str,
-    sample_index: int,
-    label_name: str,
-) -> None:
-    failed_dir = Path(failed_root) / f"sample_{sample_index:06d}_{label_name}"
-    failed_dir.mkdir(parents=True, exist_ok=True)
-    for image_path, prediction in zip(image_paths, predictions):
-        if prediction == label_idx:
-            continue
-        shutil.copy2(image_path, failed_dir / Path(image_path).name)
+    source_root: str,
+) -> int:
+    source_root_path = Path(source_root).resolve()
+    failed_root_path = Path(failed_root)
+    copied = 0
 
-
-def copy_failed_images(image_paths: List[str], failed_root: str, sample_index: int, label_name: str) -> None:
-    failed_dir = Path(failed_root) / f"sample_{sample_index:06d}_{label_name}"
-    failed_dir.mkdir(parents=True, exist_ok=True)
     for image_path in image_paths:
-        shutil.copy2(image_path, failed_dir / Path(image_path).name)
+        src = Path(image_path)
+        try:
+            relative_path = src.resolve().relative_to(source_root_path)
+        except ValueError:
+            # Fallback for unexpected absolute paths outside data_dir.
+            relative_path = Path(src.name)
+
+        dst = failed_root_path / relative_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied += 1
+
+    return copied
+
+
+def copy_failed_images(image_paths: List[str], failed_root: str, source_root: str) -> int:
+    source_root_path = Path(source_root).resolve()
+    failed_root_path = Path(failed_root)
+    copied = 0
+
+    for image_path in image_paths:
+        src = Path(image_path)
+        try:
+            relative_path = src.resolve().relative_to(source_root_path)
+        except ValueError:
+            # Fallback for unexpected absolute paths outside data_dir.
+            relative_path = Path(src.name)
+
+        dst = failed_root_path / relative_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied += 1
+
+    return copied
 
 
 def parse_filename(image_path: Path) -> Tuple[int, int, int, str]:
@@ -137,28 +160,22 @@ def evaluate_teacher(
             point_correct += int(prediction.majority_label == label_idx)
 
             if failed_dir.strip():
-                misclassified_predictions = [
-                    pred for pred in prediction.view_predictions if pred != label_idx
-                ]
                 misclassified_image_paths = [
                     image_path for image_path, pred in zip(image_paths, prediction.view_predictions) if pred != label_idx
                 ]
                 if misclassified_image_paths:
                     # Only copy 2D images that are individually misclassified.
-                    copy_misclassified_images(
+                    failed_count += copy_misclassified_images(
                         image_paths=misclassified_image_paths,
-                        predictions=misclassified_predictions,
-                        label_idx=label_idx,
                         failed_root=failed_dir,
-                        sample_index=sample_index,
-                        label_name=label_name,
+                        source_root=image_dir,
                     )
-                    failed_count += len(misclassified_image_paths)
         except Exception as exc:
             print(f"Teacher inference failed for sample {sample_index} ({label_name}): {exc}")
             if failed_dir.strip():
-                copy_failed_images(image_paths, failed_dir, sample_index, label_name)
-            failed_count += len(image_paths)
+                failed_count += copy_failed_images(image_paths, failed_dir, source_root=image_dir)
+            else:
+                failed_count += len(image_paths)
             image_total += len(image_paths)
             point_total += 1
 
