@@ -5,7 +5,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -209,6 +209,27 @@ def split_train_val(
     return data[train_idx], labels[train_idx], data[val_idx], labels[val_idx]
 
 
+def fuse_teacher_probabilities(pred: Any, label_idx: int, distill_mode: int) -> torch.Tensor:
+    if distill_mode == 0:
+        probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+        return probs / probs.sum().clamp(min=1e-8)
+
+    if distill_mode == 1:
+        view_probs = torch.tensor(pred.view_probabilities, dtype=torch.float32)
+        view_preds = torch.tensor(pred.view_predictions, dtype=torch.long)
+        correct_mask = view_preds == int(label_idx)
+
+        if int(correct_mask.sum().item()) > 0:
+            probs = view_probs[correct_mask].mean(dim=0)
+        else:
+            # Fallback: if no view is correctly classified, keep training stable with the original mean fusion.
+            probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+
+        return probs / probs.sum().clamp(min=1e-8)
+
+    raise ValueError(f"Unsupported distill_mode: {distill_mode}. Currently supported: 0 (mean), 1 (correct-only mean).")
+
+
 @torch.no_grad()
 def compute_teacher_soft_labels(
     teacher: TeacherModel,
@@ -223,6 +244,7 @@ def compute_teacher_soft_labels(
     point_radius: int,
     camera_distance: float,
     image_batch_size: int,
+    distill_mode: int,
 ) -> torch.Tensor:
     split_render_dir = Path(render_root) / split_name
     split_render_dir.mkdir(parents=True, exist_ok=True)
@@ -248,8 +270,7 @@ def compute_teacher_soft_labels(
             camera_distance=camera_distance,
             batch_size=image_batch_size,
         )
-        probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
-        probs = probs / probs.sum().clamp(min=1e-8)
+        probs = fuse_teacher_probabilities(pred, label_idx=label_idx, distill_mode=distill_mode)
         all_probs.append(probs)
 
     return torch.stack(all_probs, dim=0)
@@ -268,6 +289,7 @@ def load_or_compute_teacher_soft_labels(
     point_radius: int,
     camera_distance: float,
     image_batch_size: int,
+    distill_mode: int,
     reextract: bool = False,
 ) -> torch.Tensor:
     cache_path = Path(render_root) / f"teacher_soft_labels_{split_name}.pt"
@@ -279,6 +301,7 @@ def load_or_compute_teacher_soft_labels(
         "fov_degrees": float(fov_degrees),
         "point_radius": int(point_radius),
         "camera_distance": float(camera_distance),
+        "distill_mode": int(distill_mode),
         "teacher_checkpoint": getattr(teacher, "clip_model_name", None),
     }
 
@@ -301,6 +324,7 @@ def load_or_compute_teacher_soft_labels(
         point_radius=point_radius,
         camera_distance=camera_distance,
         image_batch_size=image_batch_size,
+        distill_mode=distill_mode,
     )
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -471,6 +495,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--distill_alpha", type=float, default=0.7)
     parser.add_argument("--distill_temperature", type=float, default=2.0)
+    parser.add_argument(
+        "--distill_mode",
+        type=int,
+        default=0,
+        help="Distillation fusion mode. 0: mean-probability fusion; 1: mean over correctly-classified views only",
+    )
 
     parser.add_argument("--teacher_num_views", type=int, default=12)
     parser.add_argument("--teacher_image_size", type=int, default=256)
@@ -535,6 +565,7 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
+                distill_mode=args.distill_mode,
                 reextract=args.reextract,
             )
             val_soft = load_or_compute_teacher_soft_labels(
@@ -550,6 +581,7 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
+                distill_mode=args.distill_mode,
                 reextract=args.reextract,
             )
             test_soft = load_or_compute_teacher_soft_labels(
@@ -565,6 +597,7 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
+                distill_mode=args.distill_mode,
                 reextract=args.reextract,
             )
         else:
@@ -632,6 +665,7 @@ def main() -> None:
                     "val_ratio": args.val_ratio,
                     "distill_alpha": args.distill_alpha,
                     "distill_temperature": args.distill_temperature,
+                    "distill_mode": args.distill_mode,
                     "teacher_num_views": args.teacher_num_views,
                     "teacher_image_size": args.teacher_image_size,
                     "teacher_fov_degrees": args.teacher_fov_degrees,
@@ -746,6 +780,7 @@ def main() -> None:
             "best_snapshot": best_meta,
             "distill_alpha": args.distill_alpha,
             "distill_temperature": args.distill_temperature,
+            "distill_mode": args.distill_mode,
         }
 
         save_path, meta_path = save_checkpoint(model, args.save_path, meta)

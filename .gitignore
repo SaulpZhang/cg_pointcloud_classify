@@ -48,3 +48,7 @@ modelnet40_ply_hdf5_2048.zip
 Pointnet_Pointnet2_pytorch-master.zip
 Pointnet_Pointnet2_pytorch-master
 Pointnet_Pointnet2_pytorch-master/*
+
+failed_teacher_samples
+failed_teacher_samples/*
+failed_teacher_samples/failed_teacher_samples/*

@@ -17,6 +17,7 @@ from train import CLIPClassifier
 class TeacherPrediction:
     majority_label: int
     view_predictions: List[int]
+    view_probabilities: List[List[float]]
     vote_counts: Dict[int, int]
     vote_distribution: Dict[int, float]
     mean_probabilities: List[float]
@@ -125,6 +126,7 @@ class TeacherModel:
         return TeacherPrediction(
             majority_label=majority_label,
             view_predictions=all_preds,
+            view_probabilities=probs_all.tolist(),
             vote_counts=vote_counts,
             vote_distribution=vote_distribution,
             mean_probabilities=mean_probs.tolist(),
