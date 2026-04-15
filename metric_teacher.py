@@ -153,11 +153,12 @@ def evaluate_teacher(
                         sample_index=sample_index,
                         label_name=label_name,
                     )
+                    failed_count += len(misclassified_image_paths)
         except Exception as exc:
-            failed_count += 1
             print(f"Teacher inference failed for sample {sample_index} ({label_name}): {exc}")
             if failed_dir.strip():
                 copy_failed_images(image_paths, failed_dir, sample_index, label_name)
+            failed_count += len(image_paths)
             image_total += len(image_paths)
             point_total += 1
 
@@ -165,7 +166,7 @@ def evaluate_teacher(
     point_accuracy = point_correct / max(point_total, 1)
     print(
         f"Teacher image accuracy: {image_accuracy:.4f} ({image_correct}/{image_total}), "
-        f"point accuracy: {point_accuracy:.4f} ({point_correct}/{point_total}), failures: {failed_count}"
+        f"point accuracy: {point_accuracy:.4f} ({point_correct}/{point_total}), failed images copied: {failed_count}"
     )
     return image_accuracy, point_accuracy
 
