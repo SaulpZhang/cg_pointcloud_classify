@@ -571,6 +571,7 @@ def main() -> None:
             teacher = load_teacher(
                 checkpoint_path=args.teacher_checkpoint,
                 clip_model_name=teacher_clip_override,
+                num_classes=args.num_classes,
                 use_amp=args.amp,
             )
 

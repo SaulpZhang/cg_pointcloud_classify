@@ -328,9 +328,10 @@ def set_seed(seed: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train a 40-class classifier on CLIP image features")
+    parser = argparse.ArgumentParser(description="Train a classifier on CLIP image features")
     parser.add_argument("--image_dir", type=str, default="output_images", help="Directory containing rendered PNG images")
     parser.add_argument("--clip_model", type=str, default="openai/clip-vit-base-patch32", help="Hugging Face CLIP model name")
+    parser.add_argument("--num_classes", type=int, default=40, help="Number of classes in the training dataset")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -470,7 +471,7 @@ def main():
         feature_dim = train_features.size(1)
         classifier = CLIPClassifier(
             feature_dim=feature_dim,
-            num_classes=40,
+            num_classes=args.num_classes,
             hidden_dim=args.head_hidden_dim,
             dropout=args.head_dropout,
         ).to(device)
@@ -523,7 +524,7 @@ def main():
                     "val_ratio": args.val_ratio,
                     "seed": args.seed,
                     "feature_dim": feature_dim,
-                    "num_classes": 40,
+                    "num_classes": args.num_classes,
                     "gpu_ids": gpu_ids,
                     "use_data_parallel": use_data_parallel,
                     "amp": use_amp,
@@ -584,7 +585,7 @@ def main():
         meta = {
             "clip_model": args.clip_model,
             "feature_dim": feature_dim,
-            "num_classes": 40,
+            "num_classes": args.num_classes,
             "best_val_acc": best_val_acc,
             "final_test_loss": final_test_loss,
             "final_test_acc": final_test_acc,

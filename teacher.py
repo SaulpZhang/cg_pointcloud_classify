@@ -30,6 +30,7 @@ class TeacherModel:
         checkpoint_path: str,
         device: Optional[str] = None,
         clip_model_name: Optional[str] = None,
+        num_classes: Optional[int] = None,
         use_amp: bool = True,
     ) -> None:
         self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -56,7 +57,15 @@ class TeacherModel:
             linear_weight = classifier_state[last_key]
 
         feature_dim = int(meta.get("feature_dim", linear_weight.shape[1]))
-        num_classes = int(meta.get("num_classes", linear_weight.shape[0]))
+        checkpoint_num_classes = int(meta.get("num_classes", linear_weight.shape[0]))
+        if num_classes is None:
+            num_classes = checkpoint_num_classes
+        elif int(num_classes) != checkpoint_num_classes:
+            print(
+                f"Warning: requested num_classes={num_classes} differs from checkpoint num_classes={checkpoint_num_classes}. "
+                "Using the requested value for classifier construction."
+            )
+        num_classes = int(num_classes)
 
         self.processor = CLIPProcessor.from_pretrained(self.clip_model_name, use_fast=True)
         self.clip_model = CLIPModel.from_pretrained(self.clip_model_name).to(self.device)
@@ -166,19 +175,29 @@ def load_teacher(
     checkpoint_path: str,
     device: Optional[str] = None,
     clip_model_name: Optional[str] = None,
+    num_classes: Optional[int] = None,
     use_amp: bool = True,
 ) -> TeacherModel:
     return TeacherModel(
         checkpoint_path=checkpoint_path,
         device=device,
         clip_model_name=clip_model_name,
+        num_classes=num_classes,
         use_amp=use_amp,
     )
 
 
 if __name__ == "__main__":
-    ckpt = "clip_classifier_40cls.pth"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Load a teacher classifier checkpoint")
+    parser.add_argument("--checkpoint_path", type=str, default="clip_classifier_40cls.pth")
+    parser.add_argument("--clip_model_name", type=str, default=None)
+    parser.add_argument("--num_classes", type=int, default=40, help="Number of classes expected by the classifier")
+    args = parser.parse_args()
+
+    ckpt = args.checkpoint_path
     if not Path(ckpt).exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt}")
-    teacher = load_teacher(ckpt)
+    teacher = load_teacher(ckpt, clip_model_name=args.clip_model_name, num_classes=args.num_classes)
     print(f"Teacher ready on {teacher.device}, CLIP model: {teacher.clip_model_name}")
