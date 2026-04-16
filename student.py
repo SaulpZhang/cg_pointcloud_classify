@@ -176,8 +176,42 @@ def load_modelnet_h5_from_list(modelnet_root: str, list_file: str) -> Tuple[np.n
     return data_np.astype(np.float32), label_np.astype(np.int64)
 
 
-def load_shape_names(modelnet_root: str) -> List[str]:
-    path = Path(modelnet_root) / "shape_names.txt"
+def load_modelnet_h5_from_paths(modelnet_root: str, h5_paths: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    if not h5_paths:
+        raise ValueError("h5_paths must not be empty")
+
+    root = Path(modelnet_root)
+    all_data: List[np.ndarray] = []
+    all_label: List[np.ndarray] = []
+
+    for raw_path in h5_paths:
+        raw_path = raw_path.strip()
+        if not raw_path:
+            continue
+        h5_path = _resolve_h5_path(root, raw_path)
+        with h5py.File(h5_path, "r") as hf:
+            data = hf["data"][:]
+            label = hf["label"][:]
+            all_data.append(data)
+            all_label.append(label)
+
+    if not all_data:
+        raise ValueError("No valid h5 files provided")
+
+    data_np = np.concatenate(all_data, axis=0)
+    label_np = np.concatenate(all_label, axis=0).reshape(-1)
+    if data_np.shape[-1] > 3:
+        data_np = data_np[:, :, :3]
+
+    return data_np.astype(np.float32), label_np.astype(np.int64)
+
+
+def load_shape_names(modelnet_root: str, shape_names_path: str = "") -> List[str]:
+    if shape_names_path.strip():
+        candidate = Path(shape_names_path)
+        path = candidate if candidate.exists() else Path(modelnet_root) / shape_names_path
+    else:
+        path = Path(modelnet_root) / "shape_names.txt"
     if not path.exists():
         raise FileNotFoundError(f"shape_names.txt not found: {path}")
 
@@ -496,6 +530,26 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train PointNet++ student with CLIP teacher distillation")
 
     parser.add_argument("--modelnet_root", type=str, default="modelnet40_ply_hdf5_2048")
+    parser.add_argument(
+        "--shape_names_path",
+        type=str,
+        default="",
+        help="Optional path to shape_names.txt. If unset, use <modelnet_root>/shape_names.txt",
+    )
+    parser.add_argument(
+        "--train_h5_paths",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Optional manual train h5 paths (support multiple paths)",
+    )
+    parser.add_argument(
+        "--test_h5_paths",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Optional manual test h5 paths (support multiple paths)",
+    )
     parser.add_argument("--teacher_checkpoint", type=str, default="clip_classifier_40cls.pth")
     parser.add_argument("--teacher_clip_model", type=str, default="", help="Optional override for teacher CLIP model")
     parser.add_argument("--teacher_render_dir", type=str, default="teacher_render_cache")
@@ -552,9 +606,17 @@ def main() -> None:
         set_seed(args.seed)
         torch.backends.cudnn.benchmark = True
 
-        shape_names = load_shape_names(args.modelnet_root)
-        train_data_all, train_label_all = load_modelnet_h5_from_list(args.modelnet_root, "train_files.txt")
-        test_data, test_label = load_modelnet_h5_from_list(args.modelnet_root, "test_files.txt")
+        shape_names = load_shape_names(args.modelnet_root, args.shape_names_path)
+
+        if args.train_h5_paths:
+            train_data_all, train_label_all = load_modelnet_h5_from_paths(args.modelnet_root, args.train_h5_paths)
+        else:
+            train_data_all, train_label_all = load_modelnet_h5_from_list(args.modelnet_root, "train_files.txt")
+
+        if args.test_h5_paths:
+            test_data, test_label = load_modelnet_h5_from_paths(args.modelnet_root, args.test_h5_paths)
+        else:
+            test_data, test_label = load_modelnet_h5_from_list(args.modelnet_root, "test_files.txt")
 
         train_data, train_label, val_data, val_label = split_train_val(
             train_data_all,
@@ -689,6 +751,9 @@ def main() -> None:
                     "lr": args.lr,
                     "weight_decay": args.weight_decay,
                     "val_ratio": args.val_ratio,
+                    "shape_names_path": args.shape_names_path,
+                    "train_h5_paths": args.train_h5_paths,
+                    "test_h5_paths": args.test_h5_paths,
                     "distill_alpha": args.distill_alpha,
                     "distill_temperature": args.distill_temperature,
                     "distill_mode": args.distill_mode,
@@ -795,6 +860,9 @@ def main() -> None:
             "use_distillation": use_distill,
             "num_classes": args.num_classes,
             "num_points": args.num_points,
+            "shape_names_path": args.shape_names_path,
+            "train_h5_paths": args.train_h5_paths,
+            "test_h5_paths": args.test_h5_paths,
             "train_size": len(train_dataset),
             "val_size": len(val_dataset),
             "test_size": len(test_dataset),
