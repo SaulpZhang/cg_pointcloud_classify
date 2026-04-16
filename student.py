@@ -5,7 +5,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -243,28 +243,34 @@ def split_train_val(
     return data[train_idx], labels[train_idx], data[val_idx], labels[val_idx]
 
 
-def fuse_teacher_probabilities(pred: Any, label_idx: int, distill_mode: int) -> torch.Tensor:
+def fuse_teacher_probabilities(
+    mean_probabilities: torch.Tensor,
+    view_probabilities: torch.Tensor,
+    view_predictions: torch.Tensor,
+    label_idx: int,
+    distill_mode: int,
+) -> torch.Tensor:
     if distill_mode == 0:
-        probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+        probs = mean_probabilities.float()
         return probs / probs.sum().clamp(min=1e-8)
 
     if distill_mode == 1:
-        view_probs = torch.tensor(pred.view_probabilities, dtype=torch.float32)
-        view_preds = torch.tensor(pred.view_predictions, dtype=torch.long)
+        view_probs = view_probabilities.float()
+        view_preds = view_predictions.long()
         correct_mask = view_preds == int(label_idx)
 
         if int(correct_mask.sum().item()) > 0:
             probs = view_probs[correct_mask].mean(dim=0)
         else:
             # Fallback: if no view is correctly classified, keep training stable with the original mean fusion.
-            probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+            probs = mean_probabilities.float()
 
         return probs / probs.sum().clamp(min=1e-8)
 
     if distill_mode == 2:
-        view_probs = torch.tensor(pred.view_probabilities, dtype=torch.float32)
+        view_probs = view_probabilities.float()
         if view_probs.ndim != 2 or view_probs.shape[0] == 0:
-            probs = torch.tensor(pred.mean_probabilities, dtype=torch.float32)
+            probs = mean_probabilities.float()
             return probs / probs.sum().clamp(min=1e-8)
 
         # Confidence fusion: use each view's max class probability as fusion weight.
@@ -285,7 +291,7 @@ def fuse_teacher_probabilities(pred: Any, label_idx: int, distill_mode: int) -> 
 
 
 @torch.no_grad()
-def compute_teacher_soft_labels(
+def compute_teacher_raw_outputs(
     teacher: TeacherModel,
     points_np: np.ndarray,
     labels_np: np.ndarray,
@@ -298,15 +304,17 @@ def compute_teacher_soft_labels(
     point_radius: int,
     camera_distance: float,
     image_batch_size: int,
-    distill_mode: int,
-) -> torch.Tensor:
+    split_desc: str,
+) -> Dict[str, torch.Tensor]:
     split_render_dir = Path(render_root) / split_name
     split_render_dir.mkdir(parents=True, exist_ok=True)
 
-    all_probs: List[torch.Tensor] = []
+    all_mean_probs: List[torch.Tensor] = []
+    all_view_probs: List[torch.Tensor] = []
+    all_view_preds: List[torch.Tensor] = []
 
     iterator = range(points_np.shape[0])
-    for i in tqdm(iterator, desc=f"Teacher soft labels ({split_name})"):
+    for i in tqdm(iterator, desc=split_desc):
         points = points_np[i]
         label_idx = int(labels_np[i])
         label_name = shape_names[label_idx] if 0 <= label_idx < len(shape_names) else f"class_{label_idx}"
@@ -324,13 +332,18 @@ def compute_teacher_soft_labels(
             camera_distance=camera_distance,
             batch_size=image_batch_size,
         )
-        probs = fuse_teacher_probabilities(pred, label_idx=label_idx, distill_mode=distill_mode)
-        all_probs.append(probs)
+        all_mean_probs.append(torch.tensor(pred.mean_probabilities, dtype=torch.float32))
+        all_view_probs.append(torch.tensor(pred.view_probabilities, dtype=torch.float32))
+        all_view_preds.append(torch.tensor(pred.view_predictions, dtype=torch.long))
 
-    return torch.stack(all_probs, dim=0)
+    return {
+        "mean_probabilities": torch.stack(all_mean_probs, dim=0),
+        "view_probabilities": torch.stack(all_view_probs, dim=0),
+        "view_predictions": torch.stack(all_view_preds, dim=0),
+    }
 
 
-def load_or_compute_teacher_soft_labels(
+def load_or_compute_teacher_raw_outputs(
     teacher: TeacherModel,
     points_np: np.ndarray,
     labels_np: np.ndarray,
@@ -343,10 +356,10 @@ def load_or_compute_teacher_soft_labels(
     point_radius: int,
     camera_distance: float,
     image_batch_size: int,
-    distill_mode: int,
+    split_desc: str,
     reextract: bool = False,
-) -> torch.Tensor:
-    cache_path = Path(render_root) / f"teacher_soft_labels_{split_name}.pt"
+) -> Dict[str, torch.Tensor]:
+    cache_path = Path(render_root) / f"teacher_raw_outputs_{split_name}.pt"
     cache_meta = {
         "split_name": split_name,
         "num_samples": int(points_np.shape[0]),
@@ -355,17 +368,21 @@ def load_or_compute_teacher_soft_labels(
         "fov_degrees": float(fov_degrees),
         "point_radius": int(point_radius),
         "camera_distance": float(camera_distance),
-        "distill_mode": int(distill_mode),
         "teacher_checkpoint": getattr(teacher, "clip_model_name", None),
     }
 
     if (not reextract) and cache_path.exists():
         cached = torch.load(cache_path, map_location="cpu")
-        if isinstance(cached, dict) and cached.get("meta") == cache_meta and "soft_labels" in cached:
-            print(f"Loaded cached teacher soft labels: {cache_path}")
-            return cached["soft_labels"].float()
+        required_keys = {"mean_probabilities", "view_probabilities", "view_predictions"}
+        if isinstance(cached, dict) and cached.get("meta") == cache_meta and required_keys.issubset(cached.keys()):
+            print(f"Loaded cached teacher raw outputs: {cache_path}")
+            return {
+                "mean_probabilities": cached["mean_probabilities"].float(),
+                "view_probabilities": cached["view_probabilities"].float(),
+                "view_predictions": cached["view_predictions"].long(),
+            }
 
-    soft_labels = compute_teacher_soft_labels(
+    raw_outputs = compute_teacher_raw_outputs(
         teacher=teacher,
         points_np=points_np,
         labels_np=labels_np,
@@ -378,13 +395,44 @@ def load_or_compute_teacher_soft_labels(
         point_radius=point_radius,
         camera_distance=camera_distance,
         image_batch_size=image_batch_size,
-        distill_mode=distill_mode,
+        split_desc=split_desc,
     )
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"meta": cache_meta, "soft_labels": soft_labels.cpu()}, cache_path)
-    print(f"Saved teacher soft labels cache: {cache_path}")
-    return soft_labels
+    torch.save(
+        {
+            "meta": cache_meta,
+            "mean_probabilities": raw_outputs["mean_probabilities"].cpu(),
+            "view_probabilities": raw_outputs["view_probabilities"].cpu(),
+            "view_predictions": raw_outputs["view_predictions"].cpu(),
+        },
+        cache_path,
+    )
+    print(f"Saved teacher raw outputs cache: {cache_path}")
+    return raw_outputs
+
+
+def build_soft_labels_from_raw_outputs(
+    raw_outputs: Dict[str, torch.Tensor],
+    labels_np: np.ndarray,
+    distill_mode: int,
+) -> torch.Tensor:
+    mean_probs_all = raw_outputs["mean_probabilities"]
+    view_probs_all = raw_outputs["view_probabilities"]
+    view_preds_all = raw_outputs["view_predictions"]
+
+    all_probs: List[torch.Tensor] = []
+    for i in range(mean_probs_all.shape[0]):
+        probs = fuse_teacher_probabilities(
+            mean_probabilities=mean_probs_all[i],
+            view_probabilities=view_probs_all[i],
+            view_predictions=view_preds_all[i],
+            label_idx=int(labels_np[i]),
+            distill_mode=distill_mode,
+        )
+        all_probs.append(probs)
+
+    return torch.stack(all_probs, dim=0)
 
 
 def run_epoch_train(
@@ -638,9 +686,9 @@ def main() -> None:
             )
 
             print(f"Teacher device: {teacher.device}")
-            print("Computing teacher soft labels for train/val/test ...")
+            print("Computing/caching teacher raw outputs for train/val/test ...")
 
-            train_soft = load_or_compute_teacher_soft_labels(
+            train_raw = load_or_compute_teacher_raw_outputs(
                 teacher=teacher,
                 points_np=train_data,
                 labels_np=train_label,
@@ -653,10 +701,10 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
-                distill_mode=args.distill_mode,
+                split_desc="Teacher raw outputs (train)",
                 reextract=args.reextract,
             )
-            val_soft = load_or_compute_teacher_soft_labels(
+            val_raw = load_or_compute_teacher_raw_outputs(
                 teacher=teacher,
                 points_np=val_data,
                 labels_np=val_label,
@@ -669,10 +717,10 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
-                distill_mode=args.distill_mode,
+                split_desc="Teacher raw outputs (val)",
                 reextract=args.reextract,
             )
-            test_soft = load_or_compute_teacher_soft_labels(
+            test_raw = load_or_compute_teacher_raw_outputs(
                 teacher=teacher,
                 points_np=test_data,
                 labels_np=test_label,
@@ -685,9 +733,13 @@ def main() -> None:
                 point_radius=args.teacher_point_radius,
                 camera_distance=args.teacher_camera_distance,
                 image_batch_size=args.teacher_image_batch_size,
-                distill_mode=args.distill_mode,
+                split_desc="Teacher raw outputs (test)",
                 reextract=args.reextract,
             )
+
+            train_soft = build_soft_labels_from_raw_outputs(train_raw, train_label, args.distill_mode)
+            val_soft = build_soft_labels_from_raw_outputs(val_raw, val_label, args.distill_mode)
+            test_soft = build_soft_labels_from_raw_outputs(test_raw, test_label, args.distill_mode)
         else:
             print("distill_alpha <= 0: skip teacher and run supervised PointNet++ training")
             train_soft = build_dummy_soft_labels(train_label, args.num_classes)
