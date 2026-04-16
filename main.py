@@ -71,7 +71,7 @@ def transform_point_cloud_to_2d(
 if __name__ == "__main__":
     labels = defaultdict(str)
 
-    with open("modelnet40_ply_hdf5_2048/shape_names.txt", "r") as f:
+    with open("scanobjectnn/shape_names.txt", "r") as f:
         file_list = f.read().splitlines()
         for i, label in enumerate(file_list):
             labels[i] = label
