@@ -52,3 +52,9 @@ Pointnet_Pointnet2_pytorch-master/*
 failed_teacher_samples
 failed_teacher_samples/*
 failed_teacher_samples/failed_teacher_samples/*
+
+ModelNet10
+ModelNet10/*
+
+scanobjectnn
+scanobjectnn/*
